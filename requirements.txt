@@ -1,4 +1,16 @@
+# Core pipeline
+faster-whisper>=1.0.0
+argostranslate>=1.9.0
+edge-tts>=6.1.0
+imageio-ffmpeg
+
+# Audio/Video processing (FFmpeg must be on PATH)
 moviepy>=1.0.3
-faster-whisper
-argostranslate
-edge-tts
+
+# GPU acceleration (optional — CPU fallback automatic)
+# torch>=2.0.0        # uncomment for GPU support
+# nvidia-cublas-cu12   # uncomment for CUDA 12
+# nvidia-cudnn-cu12    # uncomment for CUDA 12
+
+# Profiling & logging
+# rich                 # optional: better console output

@@ -13,7 +13,7 @@ import time
 import tkinter as tk
 from tkinter import filedialog, scrolledtext, ttk
 
-from translator_service import TranslatorService
+from translator_service import TranslatorService, models
 
 
 # -- Theme colours ---------------------------------------------------------
@@ -63,6 +63,7 @@ class VideoDubberApp(tk.Tk):
         self._worker: threading.Thread | None = None
         self._start_time: float = 0
         self._current_stage_idx: int = 0
+        self._models_loaded: bool = False
 
         self._styles()
         self._build()
@@ -185,6 +186,12 @@ class VideoDubberApp(tk.Tk):
         self._start_time = time.time()
         self._btn.state(["disabled"])
         self._write_log("━" * 46, "info")
+
+        # Preload models on first run (warm start)
+        if not self._models_loaded:
+            self._write_log("Loading ML models (first run only)…", "stage")
+            self._models_loaded = True
+
         self._write_log("Pipeline started…", "stage")
 
         self._worker = threading.Thread(target=self._run, daemon=True)
