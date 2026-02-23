@@ -25,6 +25,11 @@ import tempfile
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional
 
+try:
+    from moviepy.editor import AudioFileClip
+except ImportError:
+    from moviepy import AudioFileClip
+
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -61,13 +66,29 @@ ProgressCallback = Callable[[str, str], None]
 # Service
 # ---------------------------------------------------------------------------
 
+import json
+import hashlib
+
+# ---------------------------------------------------------------------------
+# Service
+# ---------------------------------------------------------------------------
+
 class TranslatorService:
-    """Orchestrates the English → Spanish audio translation pipeline."""
+    """Orchestrates the English → Spanish audio translation pipeline with persistence."""
 
     AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".ogg", ".aac", ".wma", ".m4a"}
 
     def __init__(self) -> None:
         self._temp_dir: Optional[str] = None
+        self._cache_dir: Optional[str] = None
+
+    def _get_cache_dir(self, input_path: str) -> str:
+        """Create a persistent cache dir based on input file path."""
+        path_hash = hashlib.md5(input_path.encode()).hexdigest()[:12]
+        base_name = os.path.splitext(os.path.basename(input_path))[0][:20]
+        cache_dir = os.path.join(os.getcwd(), "dubbing_cache", f"{base_name}_{path_hash}")
+        os.makedirs(cache_dir, exist_ok=True)
+        return cache_dir
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -79,58 +100,94 @@ class TranslatorService:
         output_path: str,
         progress_callback: Optional[ProgressCallback] = None,
     ) -> str:
-        """Run the full translation pipeline.  Returns *output_path*."""
+        """Run the full translation pipeline with resumption support."""
 
         def _notify(stage: str, msg: str) -> None:
             if progress_callback:
                 progress_callback(stage, msg)
 
-        self._temp_dir = tempfile.mkdtemp(prefix="translator_")
+        # Use persistent cache instead of random temp dir
+        self._temp_dir = self._get_cache_dir(input_path)
+        checkpoint_dir = os.path.join(self._temp_dir, "checkpoints")
+        os.makedirs(checkpoint_dir, exist_ok=True)
 
         try:
             # 1 — Extract / normalise audio
-            _notify("Extracting", "Reading audio file…")
-            wav_path, total_duration = self._to_wav(input_path)
-            _notify("Extracting", f"Audio ready ({total_duration:.2f}s) → {wav_path}")
+            audio_path = os.path.join(self._temp_dir, "source.mp3")
+            if os.path.exists(audio_path):
+                _notify("Extracting", "Using cached audio file…")
+                with AudioFileClip(audio_path) as clip:
+                    total_duration = clip.duration
+            else:
+                _notify("Extracting", "Reading audio file (this may take a while)…")
+                audio_path, total_duration = self._to_mp3(input_path)
+            
+            _notify("Extracting", f"Audio ready ({total_duration:.2f}s)")
 
             # 2 — Speaker diarisation
-            _notify("Diarizing", "Detecting speakers…")
-            diar_segments = self.perform_diarization(wav_path)
+            diar_json = os.path.join(checkpoint_dir, "diarization.json")
+            if os.path.exists(diar_json):
+                _notify("Diarizing", "Loading cached speakers…")
+                with open(diar_json, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    diar_segments = [SpeakerSegment(**s) for s in data]
+            else:
+                _notify("Diarizing", "Detecting speakers…")
+                diar_segments = self.perform_diarization(audio_path)
+                with open(diar_json, 'w', encoding='utf-8') as f:
+                    json.dump([s.__dict__ for s in diar_segments], f)
             _notify("Diarizing", f"{len(diar_segments)} segment(s) detected.")
 
-            # 3 — Transcription (per segment, with timestamps)
-            _notify("Transcribing", "Transcribing English speech…")
-            transcription = self.transcribe_audio(wav_path, diar_segments)
-            _notify("Transcribing",
-                    f"Transcription done ({len(transcription.segments)} segment(s), "
-                    f"{len(transcription.full_text)} chars).")
+            # 3 — Transcription
+            trans_json = os.path.join(checkpoint_dir, "transcription.json")
+            if os.path.exists(trans_json):
+                _notify("Transcribing", "Loading cached transcription…")
+                with open(trans_json, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    transcription = TranscriptionResult(
+                        full_text=data['full_text'],
+                        segments=[TimedSegment(**s) for s in data['segments']]
+                    )
+            else:
+                _notify("Transcribing", "Transcribing English speech (chunked process)…")
+                transcription = self.transcribe_audio(audio_path, diar_segments, total_duration, _notify)
+                with open(trans_json, 'w', encoding='utf-8') as f:
+                    json.dump({
+                        'full_text': transcription.full_text,
+                        'segments': [s.__dict__ for s in transcription.segments]
+                    }, f)
+            _notify("Transcribing", f"Transcription done ({len(transcription.segments)} segments).")
 
-            # 4 — Translation (preserves segment timing)
-            _notify("Translating", "Translating segments to Spanish…")
-            translated_segments = self.translate_segments(transcription.segments)
+            # 4 — Translation
+            trad_json = os.path.join(checkpoint_dir, "translation.json")
+            if os.path.exists(trad_json):
+                _notify("Translating", "Loading cached translation…")
+                with open(trad_json, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    translated_segments = [TimedSegment(**s) for s in data]
+            else:
+                _notify("Translating", "Translating segments to Spanish…")
+                translated_segments = self.translate_segments(transcription.segments)
+                with open(trad_json, 'w', encoding='utf-8') as f:
+                    json.dump([s.__dict__ for s in translated_segments], f)
             _notify("Translating", f"{len(translated_segments)} segment(s) translated.")
 
-            # 5 — TTS per segment + time-stretch + assembly
+            # 5 — TTS + Assembly
             _notify("Cloning Voice", "Generating & synchronising Spanish speech…")
             assembled_path = self.clone_voice_and_generate_speech(
-                translated_segments, total_duration
+                translated_segments, total_duration, _notify
             )
-            _notify("Cloning Voice", "Spanish audio assembled and synchronised.")
-
+            
             # 6 — Save
             _notify("Saving", f"Writing output to {output_path}…")
             self._export(assembled_path, output_path)
             _notify("Completed", f"Done → {output_path}")
 
             return output_path
-        finally:
-            self._cleanup()
+        except Exception as e:
+            raise e
 
-    # ------------------------------------------------------------------
-    # Pipeline steps
-    # ------------------------------------------------------------------
-
-    def perform_diarization(self, wav_path: str) -> List[SpeakerSegment]:
+    def perform_diarization(self, audio_path: str) -> List[SpeakerSegment]:
         """Detect *who* speaks *when*.
 
         **Placeholder** — returns two fake segments covering the full file.
@@ -138,44 +195,63 @@ class TranslatorService:
         """
         # Fallback: treat whole file as speaker_1 (single segment).
         # Replace with real diarisation to get per-speaker windows.
-        from moviepy import AudioFileClip
-        with AudioFileClip(wav_path) as clip:
+        with AudioFileClip(audio_path) as clip:
             duration = clip.duration
         return [
             SpeakerSegment("speaker_1", 0.0, duration),
         ]
 
     def transcribe_audio(
-        self, wav_path: str, diar_segments: List[SpeakerSegment]
+
+        self, audio_path: str, diar_segments: List[SpeakerSegment], total_duration: float, notify_fn: Optional[Callable] = None
     ) -> TranscriptionResult:
-        """Transcribe English speech to text using faster-whisper (local).
-
-        Each Whisper segment is assigned the speaker whose diarisation window
-        it overlaps the most.
-
-        Model sizes: tiny | base | small | medium | large-v3
+        """Transcribe audio using faster-whisper. 
+        For long files, processes in 10-minute chunks to avoid OOM.
         """
         from faster_whisper import WhisperModel
+        
+        # Load model with conservative settings
+        model = WhisperModel("base", device="cpu", compute_type="int8") # Use CPU to be safer with memory
+        
+        chunk_size = 600 # 10 minutes per chunk
+        all_timed: List[TimedSegment] = []
+        all_texts: List[str] = []
+        
+        num_chunks = math.ceil(total_duration / chunk_size)
+        
+        for i in range(num_chunks):
+            start_off = i * chunk_size
+            dur = min(chunk_size, total_duration - start_off)
+            
+            if notify_fn:
+                notify_fn("Transcribing", f"Processing chunk {i+1}/{num_chunks} ({int(start_off)}s - {int(start_off+dur)}s)")
 
-        model = WhisperModel("base", compute_type="int8")
-        segments_iter, _info = model.transcribe(wav_path, language="en")
-
-        timed: List[TimedSegment] = []
-        texts: List[str] = []
-        for seg in segments_iter:
-            text = seg.text.strip()
-            speaker_id = self._assign_speaker(seg.start, seg.end, diar_segments)
-            timed.append(TimedSegment(
-                speaker_id=speaker_id,
-                start=seg.start,
-                end=seg.end,
-                text=text,
-            ))
-            texts.append(text)
+            # Transcribe this specific window
+            # We use ffmpeg to extract a small MP3 chunk to save disk and memory
+            chunk_mp3 = os.path.join(self._temp_dir, f"chunk_{i}.mp3")
+            subprocess.run([
+                "ffmpeg", "-y", "-ss", str(start_off), "-t", str(dur), 
+                "-i", audio_path, "-acodec", "libmp3lame", "-ab", "64k", chunk_mp3
+            ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            c_segments, _ = model.transcribe(chunk_mp3, language="en")
+            for seg in c_segments:
+                speaker_id = self._assign_speaker(seg.start + start_off, seg.end + start_off, diar_segments)
+                all_timed.append(TimedSegment(
+                    speaker_id=speaker_id,
+                    start=seg.start + start_off,
+                    end=seg.end + start_off,
+                    text=seg.text.strip(),
+                ))
+                all_texts.append(seg.text.strip())
+            
+            # Clean up chunk mp3 immediately
+            try: os.remove(chunk_mp3)
+            except: pass
 
         return TranscriptionResult(
-            full_text=" ".join(texts),
-            segments=timed,
+            full_text=" ".join(all_texts),
+            segments=all_timed,
         )
 
     def translate_segments(
@@ -210,83 +286,77 @@ class TranslatorService:
         self,
         segments: List[TimedSegment],
         total_duration: float,
+        notify_fn: Optional[Callable] = None,
     ) -> str:
-        """Generate time-synchronised Spanish audio.
-
-        For every segment:
-          1. Synthesise Spanish text with edge-tts (Microsoft neural voice).
-          2. Apply FFmpeg atempo time-stretching at 50 % intensity so the
-             speed change is subtle and never sounds artificial.
-             Full ratio would be  tts_ms / original_ms ;  we instead use
-             1.0 + (ratio - 1.0) * 0.5  so the effect is halved.
-          3. Overlay the stretched segment at its start offset on a silent
-             WAV baseline of *total_duration* seconds.  Any overflow past
-             the segment window is trimmed; shortfall becomes natural silence.
-
-        Returns the path to the assembled WAV file.
-        """
+        """Generate time-synchronised Spanish audio with per-segment caching."""
         from pydub import AudioSegment
 
+        tts_cache_dir = os.path.join(self._temp_dir, "tts_cache")
+        os.makedirs(tts_cache_dir, exist_ok=True)
+
         # Silent baseline of exactly total_duration
-        sample_rate = 22050
+        # 16kHz Mono is enough for speech and saves massive RAM/disk space
+        sample_rate = 16000
         baseline = AudioSegment.silent(
             duration=int(total_duration * 1000),  # pydub uses ms
             frame_rate=sample_rate,
-        )
+        ).set_channels(1)
 
+        total_count = len(segments)
         for idx, seg in enumerate(segments):
             if not seg.text.strip():
                 continue  # leave this window as silence
+
+            if notify_fn and (idx % 5 == 0 or idx == total_count - 1):
+                notify_fn("Cloning Voice", f"Processing segment {idx+1}/{total_count}")
 
             original_ms = int((seg.end - seg.start) * 1000)
             if original_ms <= 0:
                 continue
 
-            # --- 5a: TTS → temp MP3 ------------------------------------------
-            tts_mp3 = os.path.join(self._temp_dir, f"tts_{idx}.mp3")
-            self._run_tts(seg.text, seg.speaker_id, tts_mp3)
+            # Cache check for the final stretched version
+            seg_sig = f"{seg.text}_{seg.speaker_id}_{original_ms}"
+            seg_hash = hashlib.md5(seg_sig.encode()).hexdigest()[:10]
+            stretched_wav = os.path.join(tts_cache_dir, f"fin_{seg_hash}.wav")
 
-            # --- 5b: Convert TTS to WAV for easier manipulation ---------------
-            tts_wav = os.path.join(self._temp_dir, f"tts_{idx}.wav")
-            self._ffmpeg_convert(tts_mp3, tts_wav)
+            if os.path.exists(stretched_wav):
+                stretched_audio = AudioSegment.from_wav(stretched_wav)
+            else:
+                # --- 5a: TTS → temp MP3 ---
+                tts_mp3 = os.path.join(tts_cache_dir, f"tts_{idx}.mp3")
+                self._run_tts(seg.text, seg.speaker_id, tts_mp3)
 
-            # --- 5c: Measure TTS duration -------------------------------------
-            tts_audio = AudioSegment.from_wav(tts_wav)
-            tts_ms = len(tts_audio)
-            if tts_ms == 0:
-                continue
+                # --- 5b: Convert TTS to WAV ---
+                tts_wav = os.path.join(tts_cache_dir, f"tts_{idx}.wav")
+                self._ffmpeg_convert(tts_mp3, tts_wav)
 
-            # --- 5d: Compute speed ratio (dampened to 50 %) and apply atempo --
-            #
-            # raw_ratio >1 → TTS is longer than the slot → we'd speed it up.
-            # raw_ratio <1 → TTS is shorter than the slot → we'd slow it down.
-            #
-            # Applying the full ratio often produces jarring chipmunk / slow-mo
-            # artefacts, especially for short audio clips.  We therefore apply
-            # only *half* of the deviation from 1.0 so the effect is subtle:
-            #
-            #   adjusted = 1.0 + (raw_ratio - 1.0) * 0.5
-            #
-            # Examples:
-            #   raw 2.0  → adjusted 1.5   (still speeds up, but less so)
-            #   raw 0.5  → adjusted 0.75  (still slows down, but less so)
-            #   raw 1.0  → adjusted 1.0   (no change)
-            raw_ratio = tts_ms / original_ms
-            speed_ratio = 1.0 + (raw_ratio - 1.0) * 0.5
+                # --- 5c: Measure TTS duration ---
+                tts_audio = AudioSegment.from_wav(tts_wav)
+                tts_ms = len(tts_audio)
+                if tts_ms == 0:
+                    continue
 
-            stretched_wav = os.path.join(self._temp_dir, f"stretched_{idx}.wav")
-            self._ffmpeg_atempo(tts_wav, stretched_wav, speed_ratio)
+                # --- 5d: Speed ratio and atempo ---
+                raw_ratio = tts_ms / original_ms
+                speed_ratio = 1.0 + (raw_ratio - 1.0) * 0.5
+                self._ffmpeg_atempo(tts_wav, stretched_wav, speed_ratio)
+                stretched_audio = AudioSegment.from_wav(stretched_wav)
+                
+                # Cleanup intermediate
+                try:
+                    os.remove(tts_mp3)
+                    os.remove(tts_wav)
+                except: pass
 
-            # --- 5e: Overlay on baseline at original start offset -------------
-            stretched_audio = AudioSegment.from_wav(stretched_wav)
-            # Trim to the original window; any shortfall is left as silence.
+            # --- 5e: Overlay on baseline ---
+            # Trim to the original window
             stretched_audio = stretched_audio[: original_ms]
             offset_ms = int(seg.start * 1000)
             baseline = baseline.overlay(stretched_audio, position=offset_ms)
 
-        # Export assembled audio
-        assembled_path = os.path.join(self._temp_dir, "assembled_es.wav")
-        baseline.export(assembled_path, format="wav")
+        # Export assembled audio as MP3 to avoid multi-GB WAV files
+        assembled_path = os.path.join(self._temp_dir, "assembled_es.mp3")
+        baseline.export(assembled_path, format="mp3", bitrate="128k")
         return assembled_path
 
     # ------------------------------------------------------------------
@@ -388,22 +458,28 @@ class TranslatorService:
             stderr=subprocess.DEVNULL,
         )
 
-    def _to_wav(self, input_path: str) -> tuple[str, float]:
-        """Convert any supported audio/video to WAV; returns (wav_path, duration_s)."""
-        from moviepy import AudioFileClip
+    def _to_mp3(self, input_path: str) -> tuple[str, float]:
+        """Convert any supported audio/video to 128k MP3; returns (audio_path, duration_s)."""
+        mp3_out = os.path.join(self._temp_dir, "source.mp3")
+        
+        # Use ffmpeg directly for much better control and performance
+        subprocess.run([
+            "ffmpeg", "-y", "-i", input_path,
+            "-vn",              # ignore video
+            "-acodec", "libmp3lame",
+            "-ab", "128k",      # small bitrate but good for speech
+            "-ar", "44100",
+            "-ac", "2",
+            mp3_out
+        ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        wav_out = os.path.join(self._temp_dir, "source.wav")
-        clip = AudioFileClip(input_path)
-        duration = clip.duration
-        clip.write_audiofile(wav_out, logger=None)
-        clip.close()
-        return wav_out, duration
+        with AudioFileClip(mp3_out) as clip:
+            duration = clip.duration
+        return mp3_out, duration
 
-    def _export(self, wav_path: str, output_path: str) -> None:
-        """Export the assembled WAV to the desired output format."""
-        from moviepy import AudioFileClip
-
-        clip = AudioFileClip(wav_path)
+    def _export(self, audio_path: str, output_path: str) -> None:
+        """Export the assembled audio to the desired output format."""
+        clip = AudioFileClip(audio_path)
         ext = os.path.splitext(output_path)[1].lower()
         codec_map = {
             ".mp3": "libmp3lame",
@@ -412,8 +488,10 @@ class TranslatorService:
             ".m4a": "aac",
         }
         codec = codec_map.get(ext)
+        
+        # If exporting to MP3/AAC, ensure we don't blow up size again
         if codec:
-            clip.write_audiofile(output_path, codec=codec, logger=None)
+            clip.write_audiofile(output_path, codec=codec, bitrate="128k", logger=None)
         else:
             clip.write_audiofile(output_path, logger=None)
         clip.close()
