@@ -126,9 +126,17 @@ class PipelineStepper(ctk.CTkFrame):
 # Main Application
 # ---------------------------------------------------------------------------
 
-class VideoDubberApp(TkinterDnD.Tk if HAS_DND else ctk.CTk):
+class VideoDubberApp(ctk.CTk):
     def __init__(self) -> None:
-        if not HAS_DND: super().__init__()
+        super().__init__()
+        # Inject tkinterdnd2 DnD support into the CTk root without changing base class.
+        # TkinterDnD.Tk uses Tk.tk.call('package', 'require', 'tkdnd') internally;
+        # we replicate that here so CTk widgets can register as drop targets.
+        if HAS_DND:
+            try:
+                TkinterDnD._require(self)
+            except Exception:
+                pass  # DnD unavailable at runtime; fall back silently
         self.title("AI Audio Translator")
         self.geometry("960x720")
         self.minsize(800, 600)
@@ -193,6 +201,21 @@ class VideoDubberApp(TkinterDnD.Tk if HAS_DND else ctk.CTk):
         self.out_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
         self.browse_btn = ctk.CTkButton(path_row, text="Browse", width=85, height=38, fg_color="#30363D", hover_color=ACCENT_COLOR, command=self._pick_output)
         self.browse_btn.pack(side="right")
+
+        # Threads Setting
+        threads_row = ctk.CTkFrame(self.output_card, fg_color="transparent")
+        threads_row.pack(fill="x", padx=20, pady=(0, 20))
+        ctk.CTkLabel(threads_row, text="Max CPU Threads (TTS)", font=("Segoe UI", 12), text_color=TEXT_DIM).pack(side="left")
+        
+        self.threads_var = tk.IntVar(value=10)
+        self.threads_lbl = ctk.CTkLabel(threads_row, text="10", font=("Segoe UI Bold", 12), text_color=ACCENT_COLOR, width=25)
+        self.threads_lbl.pack(side="right", padx=(10, 0))
+        
+        self.threads_slider = ctk.CTkSlider(
+            threads_row, from_=1, to=20, variable=self.threads_var, number_of_steps=19,
+            command=lambda v: self.threads_lbl.configure(text=str(int(v)))
+        )
+        self.threads_slider.pack(side="right", fill="x", expand=True, padx=(15, 0))
 
         # -- Right Column --
         self.right_col = ctk.CTkFrame(self.body, fg_color="transparent")
@@ -314,7 +337,12 @@ class VideoDubberApp(TkinterDnD.Tk if HAS_DND else ctk.CTk):
 
     def _run_bg(self):
         try:
-            self._service.run_pipeline(self._input_path, self._output_path, progress_callback=self._cb)
+            self._service.run_pipeline(
+                self._input_path, 
+                self._output_path, 
+                progress_callback=self._cb,
+                max_threads=int(self.threads_var.get())
+            )
             self._queue.put(("__done__", ""))
         except Exception as exc:
             self._queue.put(("__error__", str(exc)))

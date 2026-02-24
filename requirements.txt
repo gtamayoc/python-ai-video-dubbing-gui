@@ -1,5 +1,27 @@
+# Core pipeline
 moviepy>=1.0.3
 faster-whisper
-argostranslate
 edge-tts
 pydub
+langdetect
+
+# LLM translation backend – GGUF is the fastest (recommended)
+# On CPU-only machines install without GPU flags:
+#   pip install llama-cpp-python
+# On machines with CUDA:
+#   CMAKE_ARGS="-DLLAMA_CUDA=on" pip install llama-cpp-python
+llama-cpp-python
+
+# Transformers fallback (used only if llama-cpp-python is unavailable)
+transformers>=4.40.0
+torch
+
+# GUI
+customtkinter
+tkinterdnd2
+Pillow
+
+# Optional: real multi-speaker diarization
+# pip install pyannote.audio
+# Also requires: export HF_TOKEN=<your_huggingface_token>
+# pyannote.audio
