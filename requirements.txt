@@ -3,14 +3,34 @@ faster-whisper>=1.0.0
 argostranslate>=1.9.0
 edge-tts>=6.1.0
 imageio-ffmpeg
-
-# Audio/Video processing (FFmpeg must be on PATH)
 moviepy>=1.0.3
+pydub
+langdetect
+
+# LLM translation backend – GGUF is the fastest (recommended)
+# On CPU-only machines install without GPU flags:
+#   pip install llama-cpp-python
+# On machines with CUDA:
+#   CMAKE_ARGS="-DLLAMA_CUDA=on" pip install llama-cpp-python
+llama-cpp-python
+
+# Transformers fallback (used only if llama-cpp-python is unavailable)
+transformers>=4.40.0
+torch
+
+# GUI
+customtkinter
+tkinterdnd2
+Pillow
 
 # GPU acceleration (optional — CPU fallback automatic)
-# torch>=2.0.0        # uncomment for GPU support
 # nvidia-cublas-cu12   # uncomment for CUDA 12
 # nvidia-cudnn-cu12    # uncomment for CUDA 12
 
 # Profiling & logging
 # rich                 # optional: better console output
+
+# Optional: real multi-speaker diarization
+# pip install pyannote.audio
+# Also requires: export HF_TOKEN=<your_huggingface_token>
+# pyannote.audio
