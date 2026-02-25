@@ -235,12 +235,15 @@ class _ModelManager:
                     self._whisper_model_size, device, ctype,
                 )
                 t0 = time.perf_counter()
+                system_cores = os.cpu_count() or 4
+                safe_threads = max(1, system_cores - 2)
+
                 self._whisper_model = WhisperModel(
                     self._whisper_model_size,
                     device=device,
                     compute_type=ctype,
-                    cpu_threads=max(4, (os.cpu_count() or 4)),
-                    num_workers=max(2, (os.cpu_count() or 4) // 2),
+                    cpu_threads=safe_threads,
+                    num_workers=max(1, safe_threads // 2),
                 )
                 logger.info("Whisper loaded in %.2fs", time.perf_counter() - t0)
             return self._whisper_model
@@ -417,11 +420,17 @@ class TranslatorService:
             from llama_cpp import Llama
             if notify_fn:
                 notify_fn("Translating", "Cargando LLM GGUF (Qwen2.5-1.5B Q4_K_M)…")
+            system_cores = os.cpu_count() or 4
+            safe_n_threads = max(1, system_cores - 2)
+
             self._llm = Llama.from_pretrained(
                 repo_id="Qwen/Qwen2.5-1.5B-Instruct-GGUF",
                 filename="*q4_k_m*",
-                n_ctx=32768,  # Context window (32768 usa toda la capacidad del modelo entrenado, evita el warning)
-                n_threads=os.cpu_count() or 4,
+                n_ctx=4096,      # Reducido de 32768 a 4096: Evita reservar cantidades masivas de RAM/VRAM
+                n_threads=safe_n_threads,
+                n_threads_batch=safe_n_threads,
+                n_gpu_layers=-1, # <--- CRUCIAL: Intenta usar la GPU para evitar saturar el procesador
+                n_batch=512,     # <--- Divide el procesamiento de prompts largos
                 verbose=False,
             )
             self._llm_backend = "gguf"
@@ -443,6 +452,8 @@ class TranslatorService:
             self._llm = AutoModelForCausalLM.from_pretrained(
                 model_name,
                 torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+                low_cpu_mem_usage=True,
+                device_map="auto" if torch.cuda.is_available() else None,
             )
             if torch.cuda.is_available():
                 self._llm = self._llm.cuda()
@@ -604,6 +615,7 @@ class TranslatorService:
                            "Para diarización real define la variable de entorno HF_TOKEN.")
 
         try:
+            import torch
             from pyannote.audio import Pipeline as PyannotePipeline
             if not hf_token:
                 raise EnvironmentError("HF_TOKEN requerido para pyannote")
@@ -614,6 +626,9 @@ class TranslatorService:
                 "pyannote/speaker-diarization-3.1",
                 use_auth_token=hf_token,
             )
+            # Enviar pyannote a GPU si está disponible para evitar bloqueos del sistema
+            if torch.cuda.is_available():
+                pipeline.to(torch.device("cuda"))
             diarization = pipeline(audio_path)
             segments: List[SpeakerSegment] = []
             for turn, _, speaker in diarization.itertracks(yield_label=True):
