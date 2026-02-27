@@ -51,21 +51,16 @@ import shutil
 import subprocess
 import tempfile
 import time
-
-import warnings
-
-# Suppress HuggingFace symlink warnings on Windows before importing anything else
-os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
-warnings.filterwarnings("ignore", category=UserWarning, message=".*local_dir_use_symlinks.*")
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from threading import Lock
 from typing import Callable, Dict, List, Optional, Tuple
+from threading import Lock
 
+import yt_dlp
 try:
-    from moviepy.editor import AudioFileClip
+    from moviepy.editor import AudioFileClip, VideoFileClip
 except ImportError:
-    from moviepy import AudioFileClip
+    from moviepy import AudioFileClip, VideoFileClip
 
 logger = logging.getLogger(__name__)
 
@@ -1251,3 +1246,87 @@ class TranslatorService:
         inputs     = tokenizer(text, return_tensors='pt', truncation=True, max_length=512)
         translated_tokens = model.generate(**inputs)
         return tokenizer.decode(translated_tokens[0], skip_special_tokens=True) if text else ""
+
+# ---------------------------------------------------------------------------
+# Web Media Extraction Functions
+# ---------------------------------------------------------------------------
+
+def download_web_audio(url: str, output_path: str, progress_callback: Optional[Callable] = None) -> str:
+    """Download best audio from web and save it as .wav using yt-dlp."""
+    if progress_callback:
+        progress_callback("Extracting", "Descargando audio de la web...")
+    
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'wav',
+            'preferredquality': '192',
+        }],
+        'outtmpl': output_path.replace('.wav', ''),  # yt-dlp appends .wav due to postprocessor
+        'quiet': True,
+        'no_warnings': True,
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+        return output_path
+    except yt_dlp.utils.DownloadError as e:
+        raise RuntimeError("Unsupported platform or private video") from e
+
+def download_web_video(url: str, output_path: str, progress_callback: Optional[Callable] = None) -> str:
+    """Download best video containing audio from web using yt-dlp."""
+    if progress_callback:
+        progress_callback("Extracting", "Descargando video de la web...")
+    
+    ydl_opts = {
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'outtmpl': output_path,
+        'quiet': True,
+        'no_warnings': True,
+        'merge_output_format': 'mp4'
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+        return output_path
+    except yt_dlp.utils.DownloadError as e:
+        raise RuntimeError("Unsupported platform or private video") from e
+
+def replace_audio_in_video(video_path: str, audio_path: str, output_path: str, progress_callback: Optional[Callable] = None) -> None:
+    """Replace the audio track of a video with a new audio file using ffmpeg."""
+    if progress_callback:
+        progress_callback("Saving", "Uniendo audio traducido con el video original...")
+        
+    try:
+        # We process it out to a temporary suffix, then rename
+        tmp_output = output_path + ".tmp.mp4"
+        subprocess.run([
+            "ffmpeg", "-y",
+            "-i", video_path,     # Input video
+            "-i", audio_path,     # Input audio
+            "-c:v", "copy",       # Copy video stream directly
+            "-c:a", "aac",        # Encode audio as advanced audio codec
+            "-map", "0:v:0",      # Map first video stream from first input
+            "-map", "1:a:0",      # Map first audio stream from second input
+            tmp_output
+        ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
+        # Replace the original with the new merged video
+        shutil.move(tmp_output, output_path)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError("Failed to merge audio into video") from e
+
+def _export_ffmpeg(audio_path: str, output_path: str) -> None:
+    """Fallback export using ffmpeg directly for formats not handled by MoviePy."""
+    try:
+        subprocess.run([
+            "ffmpeg", "-y", "-i", audio_path,
+            "-acodec", "libmp3lame" if output_path.endswith(".mp3") else "pcm_s16le",
+            output_path
+        ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"Fallo el exportado con FFmpeg: {e}")
+

@@ -25,16 +25,7 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-REM Crear entorno virtual si no existe
-if not exist ".venv\Scripts\activate.bat" (
-    echo Creando entorno virtual...
-    python -m venv .venv
-    if %errorlevel% neq 0 (
-        echo ERROR: No se pudo crear el entorno virtual.
-        pause
-        exit /b 1
-    )
-)
+
 
 REM Activar entorno virtual
 echo Activando entorno virtual...

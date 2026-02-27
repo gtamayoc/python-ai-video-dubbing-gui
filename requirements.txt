@@ -6,6 +6,8 @@ imageio-ffmpeg
 moviepy>=1.0.3
 pydub
 langdetect
+yt-dlp
+
 
 # LLM translation backend – GGUF is the fastest (recommended)
 # On CPU-only machines install without GPU flags:
