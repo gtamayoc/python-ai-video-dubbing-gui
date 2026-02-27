@@ -1,0 +1,98 @@
+# ===================================================================
+#  AI Video Dubbing -- Pipeline Configuration
+#  Edit this file to switch models, backends, and pipeline modes.
+# ===================================================================
+
+# --- Pipeline mode -------------------------------------------------
+# "simple"   -> Legacy: faster-whisper small + Argos + edge-tts
+# "advanced" -> NEW:    faster-whisper large-v3 + MarianMT + edge-tts (high quality)
+pipeline_mode: advanced   # simple | advanced
+
+# --- STT (Speech-to-Text) ------------------------------------------
+stt:
+  # Model size for faster-whisper:
+  #   simple mode   -> "small"     (fast, lower accuracy)
+  #   advanced mode -> "large-v3"  (best accuracy)
+  model_size: large-v3        # tiny | base | small | medium | large-v3 | large-v3-turbo
+  language: en                # Source language code, e.g. "en", "es", "fr" or "auto"
+  beam_size: 5
+  vad_filter: true
+  condition_on_previous_text: false
+
+# --- Diarization ---------------------------------------------------
+diarization:
+  enabled: true               # Disable to skip and treat audio as single speaker
+  model: pyannote/speaker-diarization-3.1
+
+# --- Translation backend -------------------------------------------
+translation:
+  # Backend choices:
+  #   "marian"  -> Helsinki-NLP MarianMT, fast supervised seq2seq, best for en->es
+  #   "nllb"    -> facebook/nllb-200-distilled-600M, multilingual (slower)
+  #   "gguf"    -> Qwen2.5 GGUF via llama-cpp-python (LLM, context-aware, slowest)
+  #   "argos"   -> Legacy argostranslate (simple mode fallback)
+  backend: marian             # marian | nllb | gguf | argos
+
+  # MarianMT model (used when backend="marian")
+  marian_model: Helsinki-NLP/opus-mt-en-es
+
+  # NLLB model (used when backend="nllb")
+  nllb_model: facebook/nllb-200-distilled-600M
+  nllb_src_lang: eng_Latn
+  nllb_tgt_lang: spa_Latn
+
+  # GGUF model (used when backend="gguf")
+  gguf_repo: Qwen/Qwen2.5-1.5B-Instruct-GGUF
+  gguf_filename: "*q4_k_m*"
+
+  # Language pair
+  source_lang: en
+  target_lang: es
+
+  # How many segments to batch per translation call
+  batch_size: 8
+
+# --- TTS (Text-to-Speech) ------------------------------------------
+tts:
+  # Backend choices:
+  #   "edge"  -> Microsoft edge-tts (free, fast, no local GPU needed)
+  #   "xtts"  -> Coqui XTTS v2, voice cloning (GPU recommended)
+  backend: edge               # edge | xtts
+
+  # Default voice for edge-tts
+  default_voice: es-ES-AlvaroNeural
+
+  # Per-speaker voice mapping (edge-tts voices)
+  speaker_voices:
+    speaker_1: es-ES-AlvaroNeural
+    speaker_2: es-ES-ElviraNeural
+    speaker_3: es-MX-JorgeNeural
+    speaker_4: es-MX-DaliaNeural
+
+  # XTTS settings (used when backend="xtts")
+  xtts_model: tts_models/multilingual/multi-dataset/xtts_v2
+  xtts_language: es
+  # Voice cloning: extracts a reference clip per speaker from the source audio
+  use_voice_cloning: false    # true | false
+  reference_clip_duration: 6.0
+
+# --- Duration alignment --------------------------------------------
+alignment:
+  max_atempo_ratio: 1.30      # Maximum speed-up ratio before allowing overflow
+  min_atempo_ratio: 0.75      # Minimum slow-down ratio
+  silence_overflow_s: 2.0    # If next segment gap >= this, allow TTS to overflow
+
+# --- Segment merging -----------------------------------------------
+merging:
+  merge_gap_s: 1.5            # Max silence gap between same-speaker segments to merge
+  merge_max_dur_s: 15.0       # Max duration of a merged segment
+
+# --- Chunking (for very long audio) --------------------------------
+chunks:
+  size_s: 600                 # 10-minute primary chunks
+  overlap_s: 10               # Overlap to prevent word clipping at boundary
+
+# --- Compute / hardware --------------------------------------------
+compute:
+  device: auto                # auto | cuda | cpu
+  compute_type: auto          # auto | float16 | float32 | int8

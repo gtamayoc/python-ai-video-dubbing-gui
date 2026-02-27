@@ -1,39 +1,67 @@
-# Core pipeline
-faster-whisper>=1.0.0
-argostranslate>=1.9.0
-edge-tts>=6.1.0
-imageio-ffmpeg
+# ════════════════════════════════════════════════════════════════
+#  AI Video Dubbing – Python dependencies
+# ════════════════════════════════════════════════════════════════
+
+# ── Audio / Video I/O ────────────────────────────────────────────
 moviepy>=1.0.3
 pydub
-langdetect
 yt-dlp
+imageio-ffmpeg
 
+# ── STT (Speech-to-Text) ─────────────────────────────────────────
+faster-whisper>=1.0.0
 
-# LLM translation backend – GGUF is the fastest (recommended)
-# On CPU-only machines install without GPU flags:
+# ── Diarization (optional – requires HF_TOKEN in .env) ───────────
+pyannote.audio
+onnxruntime           # CPU runtime for pyannote segmentation model
+
+# ── Translation backends ─────────────────────────────────────────
+
+# [DEFAULT – RECOMMENDED] MarianMT & NLLB via transformers
+# Helsinki-NLP/opus-mt-en-es  ≈ 300 MB  — fast supervised en→es
+# facebook/nllb-200-distilled-600M       — multilingual (200 langs)
+transformers>=4.40.0
+sentencepiece          # required by MarianMT tokenizer
+sacremoses             # required by MarianMT tokenizer
+torch                  # required for transformers inference
+
+# [OPTIONAL] LLM-based translation backend (GGUF via llama-cpp-python)
+# Uncomment the CPU-only or GPU variant you need:
+#
+# CPU-only:
 #   pip install llama-cpp-python
-# On machines with CUDA:
+#
+# CUDA 12:
 #   CMAKE_ARGS="-DLLAMA_CUDA=on" pip install llama-cpp-python
+#
 llama-cpp-python
 
-# Transformers fallback (used only if llama-cpp-python is unavailable)
-transformers>=4.40.0
-torch
+# [LEGACY / SIMPLE MODE] argostranslate fallback
+argostranslate>=1.9.0
 
-# GUI
+# ── Language detection ────────────────────────────────────────────
+langdetect
+
+# ── TTS backends ─────────────────────────────────────────────────
+
+# [DEFAULT] Microsoft edge-tts — free, fast, requires internet
+edge-tts>=6.1.0
+
+# [OPTIONAL] Coqui XTTS v2 — voice cloning, GPU recommended
+# Uncomment to install:
+#   pip install coqui-tts
+# coqui-tts
+
+# ── GUI ───────────────────────────────────────────────────────────
 customtkinter
 tkinterdnd2
 Pillow
 
-# GPU acceleration (optional — CPU fallback automatic)
-# nvidia-cublas-cu12   # uncomment for CUDA 12
-# nvidia-cudnn-cu12    # uncomment for CUDA 12
-
-# Profiling & logging
-# rich                 # optional: better console output
+# ── Config ───────────────────────────────────────────────────────
 python-dotenv
+PyYAML>=6.0            # required to parse config.yaml
 
-# Optional: real multi-speaker diarization
-# Requires: export HF_TOKEN=<your_huggingface_token>
-pyannote.audio
-onnxruntime
+# ── GPU acceleration (CUDA) ───────────────────────────────────────
+# Uncomment for CUDA 12 if torch was installed with CPU-only variant:
+# nvidia-cublas-cu12
+# nvidia-cudnn-cu12

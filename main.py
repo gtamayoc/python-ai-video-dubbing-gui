@@ -13,6 +13,14 @@ try:
 except Exception:
     sys.modules["torchcodec"] = None
 
+# Force huggingface_hub to never use symlinks on Windows to prevent WinError 1314
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+try:
+    import huggingface_hub.file_download
+    huggingface_hub.file_download.are_symlinks_supported = lambda *args, **kwargs: False
+except ImportError:
+    pass
+
 # Load environment variables from .env file
 load_dotenv()
 

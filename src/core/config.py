@@ -1,15 +1,26 @@
-# Pipeline Configuration Constants
+"""
+src/core/config.py  (v2 – kept for backward compatibility)
 
-CHUNK_SIZE_S       = 600   # 10-minute primary chunks for STT
-CHUNK_OVERLAP_S    = 10    # Overlap to avoid clipping words at chunk boundary
-MERGE_GAP_S        = 1.5   # Max silence gap to merge consecutive same-speaker segments
-MERGE_MAX_DUR_S    = 15.0  # Max duration of a merged segment
-ATEMPO_MAX_RATIO   = 1.20  # Maximum allowed speed-up ratio before we prefer overflow
-SILENCE_OVERFLOW_S  = 2.0  # If next segment is ≥ this many seconds away, allow TTS to overflow
-CHARS_PER_SEC      = 15    # Approx characters per second for isochrony hints
-TTS_BATCH_SIZE     = 8     # How many segments to send to LLM per batch
+All pipeline parameters are now in config.yaml / settings.py.
+This file keeps legacy constants that other modules import.
 
-# Default Speaker Voice Mapping
+NOTE: We avoid importing settings at module level here to prevent
+circular-import / blocking startup. Constants are defined with defaults
+and updated lazily when the settings module is explicitly requested.
+"""
+
+# ── Legacy constants (defaults match config.yaml) ─────────────────────────────
+
+CHUNK_SIZE_S        = 600
+CHUNK_OVERLAP_S     = 10
+MERGE_GAP_S         = 1.5
+MERGE_MAX_DUR_S     = 15.0
+ATEMPO_MAX_RATIO    = 1.30
+SILENCE_OVERFLOW_S  = 2.0
+TTS_BATCH_SIZE      = 8
+CHARS_PER_SEC       = 15
+
+# Default Speaker Voice Mapping (edge-tts voices)
 DEFAULT_SPEAKER_VOICE = {
     "speaker_1": "es-ES-AlvaroNeural",
     "speaker_2": "es-ES-ElviraNeural",
