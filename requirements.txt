@@ -31,8 +31,9 @@ Pillow
 
 # Profiling & logging
 # rich                 # optional: better console output
+python-dotenv
 
 # Optional: real multi-speaker diarization
-# pip install pyannote.audio
-# Also requires: export HF_TOKEN=<your_huggingface_token>
-# pyannote.audio
+# Requires: export HF_TOKEN=<your_huggingface_token>
+pyannote.audio
+onnxruntime

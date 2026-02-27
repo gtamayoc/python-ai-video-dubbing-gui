@@ -1,34 +1,42 @@
 """
-main.py — Entry point for the Audio Translator application.
+AI Audio Translator - Entry Point
 """
-import tkinter as tk
+import os
+import sys
+import warnings
+import logging
+from dotenv import load_dotenv
 
-def launch_advanced():
-    root.destroy()
-    from app import VideoDubberApp
-    VideoDubberApp().mainloop()
+# Block torchcodec globally to avoid DLL/FFmpeg errors on Windows
+try:
+    import torchcodec
+except Exception:
+    sys.modules["torchcodec"] = None
 
-def launch_simple():
-    root.destroy()
-    from simple_gui import SimpleDubbingApp
-    SimpleDubbingApp().mainloop()
+# Load environment variables from .env file
+load_dotenv()
+
+hf_token = os.environ.get("HF_TOKEN")
+if hf_token and hf_token.strip() and not hf_token.startswith("YOUR_"):
+    try:
+        from huggingface_hub import login
+        login(token=hf_token.strip(), add_to_git_credential=False)
+        logging.info("Hugging Face Hub authenticated.")
+    except Exception as e:
+        logging.warning(f"Failed to authenticate with Hugging Face Hub: {e}")
+else:
+    logging.warning("No valid HF_TOKEN found in .env. Some services (Diarization) might fail.")
+
+# Suppress noisy warnings from pyannote/torchcodec and others
+warnings.filterwarnings("ignore", category=UserWarning)
+os.environ["PYANNOTE_AUDIO_IO"] = "false" # Try to skip torchcodec check if possible
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
+# Set up logging before anything else
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+from src.ui.main_window import MainWindow
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    root.title("Select Application Mode")
-    root.geometry("350x200")
-    root.resizable(False, False)
-    
-    # Center the window
-    root.eval('tk::PlaceWindow . center')
-    
-    label = tk.Label(root, text="Elige el modo de la aplicacion:", font=("Segoe UI", 12))
-    label.pack(pady=20)
-    
-    btn_advanced = tk.Button(root, text="Modo Avanzado (Original)", font=("Segoe UI", 11), width=25, command=launch_advanced)
-    btn_advanced.pack(pady=5)
-    
-    btn_simple = tk.Button(root, text="Modo Simple (Nuevo)", font=("Segoe UI", 11), width=25, command=launch_simple)
-    btn_simple.pack(pady=5)
-    
-    root.mainloop()
+    app = MainWindow()
+    app.mainloop()
